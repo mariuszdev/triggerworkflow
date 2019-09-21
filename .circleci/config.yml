@@ -1,0 +1,73 @@
+version: 2
+jobs:
+  test:
+    docker:
+      - image: circleci/node:10.16.3-stretch-browsers
+    steps:
+      - checkout
+      - restore_cache:
+          key: dependency-cache-{{ checksum "package-lock.json" }}
+      - run: npm ci
+      - save_cache:
+          key: dependency-cache-{{ checksum "package-lock.json" }}
+          paths:
+            - ./node_modules
+      - run: npm run test
+      - persist_to_workspace:
+          root: .
+          paths:
+            - ./node_modules
+            - ./package.json
+            - ./public
+            - ./src
+            - ./.env
+            - ./tsconfig.json
+  build:
+    docker:
+      - image: circleci/node:10.16.3-stretch-browsers
+    steps:
+      - attach_workspace:
+          at: .
+      - run: npm run build
+      - persist_to_workspace:
+          root: .
+          paths:
+            - ./build
+  deploy:
+    docker:
+      - image: google/cloud-sdk
+    steps:
+      - attach_workspace:
+          at: .
+      - run: gcloud --quiet config set project ${GOOGLE_PROJECT_ID}
+      - run: echo ${GCLOUD_SERVICE_KEY} > ./gcp-key.json
+      - run: gcloud auth activate-service-account --key-file=gcp-key.json
+      - run: gsutil -m rsync -r -d ./build ${GCLOUD_BUCKET}
+
+workflows:
+  version: 2
+  build-test-deploy:
+    jobs:
+      - test:
+          context: triggerworkflow
+          filters:
+            tags:
+              only: /.*/
+      - build:
+          requires:
+            - test
+          context: triggerworkflow
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
+      - deploy:
+          requires:
+            - build
+          context: triggerworkflow
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v.*/
