@@ -21,12 +21,26 @@ export function* fetchRepositories(token: string) {
 }
 
 export function* triggerWorkflow(repository: RepositoryType, token: string, data: object) {
-  const response = yield fetch(process.env.REACT_APP_PROXY_URL + prepareRequestUrl(repository, token), {
+  const response = yield fetch(process.env.REACT_APP_PROXY_URL + prepareRequestUrl(repository, "build", token), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify(data)
+  });
+
+  if (response.ok) {
+    return true;
+  }
+
+  const body = yield response.json();
+
+  throw new Error(body.message);
+}
+
+export function* clearCache(repository: RepositoryType, token: string) {
+  const response = yield fetch(process.env.REACT_APP_PROXY_URL + prepareRequestUrl(repository, "build-cache", token), {
+    method: "DELETE"
   });
 
   if (response.ok) {

@@ -21,7 +21,7 @@ import ExpansionPanelSummary from "@material-ui/core/ExpansionPanelSummary";
 
 import asyncProcess from "./utils/async-process";
 import prepareRequestUrl from "./utils/prepareRequestUrl";
-import { triggerWorkflow } from "./api";
+import { triggerWorkflow, clearCache } from "./api";
 import { RepositoryType } from "./types";
 
 type PropType<TObj, TProp extends keyof TObj> = TObj[TProp];
@@ -32,6 +32,11 @@ type FormDataType = {
   tag: string;
   branch: string;
   revision: string;
+};
+
+const ACTIONS = {
+  "TRIGGER-WORKFLOW": "TRIGGER-WORKFLOW",
+  "CLEAR-CACHE": "CLEAR-CACHE"
 };
 
 function prepareRequestPayload(formDataType: FormDataType, activeParametersGroup: ActiveParametersGroupType) {
@@ -64,12 +69,16 @@ const styles = (theme: Theme) =>
     triggerButton: {
       height: "40px"
     },
-    curlButton: {
+    subActionButton: {
       textTransform: "none",
       paddingLeft: theme.spacing(1),
       paddingRight: theme.spacing(1),
+      marginRight: theme.spacing(1),
       marginTop: theme.spacing(2),
-      backgroundColor: theme.palette.grey[200]
+      backgroundColor: theme.palette.grey[200],
+      "&:last-child": {
+        marginRight: 0
+      }
     },
     curlInput: {
       position: "absolute",
@@ -159,15 +168,17 @@ interface State extends FormDataType {
   tagError?: string;
   branchRevisionError?: string;
   error?: string;
-  pending: boolean;
+  actionPending: string | null;
   clipboardPopoverVisible: boolean;
   triggerPopoverVisible: boolean;
+  clearCachePopoverVisible: boolean;
   activeParametersGroup: "REVISION-BRANCH" | "TAG";
 }
 
 class Repository extends Component<Props, State> {
   curlInputRef = createRef<HTMLInputElement>();
   curlButtonRef = createRef<HTMLButtonElement>();
+  clearCacheButtonRef = createRef<HTMLButtonElement>();
   triggerButtonRef = createRef<HTMLButtonElement>();
   cancelRequest?: () => void = undefined;
 
@@ -176,9 +187,10 @@ class Repository extends Component<Props, State> {
     tag: "",
     branch: "",
     revision: "",
-    pending: false,
+    actionPending: null,
     clipboardPopoverVisible: false,
-    triggerPopoverVisible: false
+    triggerPopoverVisible: false,
+    clearCachePopoverVisible: false
   };
 
   componentWillUnmount() {
@@ -212,7 +224,7 @@ class Repository extends Component<Props, State> {
         this.cancelRequest = undefined;
 
         this.setState({
-          pending: false,
+          actionPending: null,
           triggerPopoverVisible: true
         });
       });
@@ -230,6 +242,7 @@ class Repository extends Component<Props, State> {
 
     return `curl -X POST ${prepareRequestUrl(
       repository,
+      "build",
       token
     )} -H "Content-Type: application/json" -d '${JSON.stringify(
       prepareRequestPayload({ branch, tag, revision }, activeParametersGroup)
@@ -245,6 +258,36 @@ class Repository extends Component<Props, State> {
         clipboardPopoverVisible: true
       });
     }
+  };
+
+  onResetCache = () => {
+    const { repository, token } = this.props;
+
+    const [promise, cancel] = asyncProcess(clearCache.bind(null, repository, token));
+
+    this.cancelRequest = cancel;
+
+    this.setState({
+      error: undefined,
+      tagError: undefined,
+      branchRevisionError: undefined,
+      actionPending: ACTIONS["CLEAR-CACHE"]
+    });
+
+    promise
+      .catch(error => {
+        this.setState({
+          error: error.message
+        });
+      })
+      .finally(() => {
+        this.cancelRequest = undefined;
+
+        this.setState({
+          actionPending: null,
+          clearCachePopoverVisible: true
+        });
+      });
   };
 
   onTriggerWorkflow = (e: FormEvent<HTMLFormElement>) => {
@@ -274,7 +317,7 @@ class Repository extends Component<Props, State> {
     }
 
     this.setState({
-      pending: true
+      actionPending: ACTIONS["TRIGGER-WORKFLOW"]
     });
 
     this.triggerWorkflow();
@@ -318,6 +361,12 @@ class Repository extends Component<Props, State> {
     });
   };
 
+  onClearCachePopoverClose = () => {
+    this.setState({
+      clearCachePopoverVisible: false
+    });
+  };
+
   render() {
     const { expanded, onToggle, classes, repository } = this.props;
     const {
@@ -326,9 +375,10 @@ class Repository extends Component<Props, State> {
       revision,
       activeParametersGroup,
       error,
-      pending,
+      actionPending,
       clipboardPopoverVisible,
       triggerPopoverVisible,
+      clearCachePopoverVisible,
       tagError,
       branchRevisionError
     } = this.state;
@@ -398,7 +448,7 @@ class Repository extends Component<Props, State> {
                   placeholder="e.g. develop"
                   label="branch"
                   name="branch"
-                  disabled={pending}
+                  disabled={actionPending === ACTIONS["TRIGGER-WORKFLOW"]}
                   value={branch}
                 />
                 <TextField
@@ -413,7 +463,7 @@ class Repository extends Component<Props, State> {
                   label="revision"
                   placeholder="e.g. 13c5a2d689eea3803c267a"
                   name="revision"
-                  disabled={pending}
+                  disabled={actionPending === ACTIONS["TRIGGER-WORKFLOW"]}
                   value={revision}
                 />
                 <FormHelperText error={true}>{branchRevisionError}</FormHelperText>
@@ -450,7 +500,7 @@ class Repository extends Component<Props, State> {
                   placeholder="e.g. v1.4.1"
                   name="tag"
                   autoComplete="off"
-                  disabled={pending}
+                  disabled={actionPending === ACTIONS["TRIGGER-WORKFLOW"]}
                   value={tag}
                 />
                 <FormHelperText error={true}>{tagError}</FormHelperText>
@@ -490,45 +540,75 @@ class Repository extends Component<Props, State> {
                       color="primary"
                       ref={this.triggerButtonRef}
                       fullWidth
-                      disabled={pending}
+                      disabled={actionPending === ACTIONS["TRIGGER-WORKFLOW"]}
                       className={classes.triggerButton}
                     >
-                      {pending ? "Loading..." : "Trigger"}
+                      {actionPending === ACTIONS["TRIGGER-WORKFLOW"] ? "Loading..." : "Trigger"}
                     </Button>
-                    <Popover
-                      open={clipboardPopoverVisible}
-                      anchorEl={this.curlButtonRef.current}
-                      onClose={this.onClipboardPopoverClose}
-                      anchorOrigin={{
-                        vertical: "bottom",
-                        horizontal: "center"
-                      }}
-                      transformOrigin={{
-                        vertical: "top",
-                        horizontal: "center"
-                      }}
-                    >
-                      <Typography className={classes.popover}>cURL copied to clipboard</Typography>
-                    </Popover>
-                    <Button
-                      size="small"
-                      type="button"
-                      variant="contained"
-                      className={classes.curlButton}
-                      ref={this.curlButtonRef}
-                      onClick={this.onCopyCurl}
-                    >
-                      cURL
-                      <SaveAltIcon className={classes.curlIcon} />
-                    </Button>
-                    <input
-                      placeholder="curl"
-                      className={classes.curlInput}
-                      value={this.generateCurl()}
-                      ref={this.curlInputRef}
-                      tabIndex={-1}
-                      readOnly
-                    />
+                    <Box display="flex">
+                      <Popover
+                        open={clipboardPopoverVisible}
+                        anchorEl={this.curlButtonRef.current}
+                        onClose={this.onClipboardPopoverClose}
+                        anchorOrigin={{
+                          vertical: "bottom",
+                          horizontal: "center"
+                        }}
+                        transformOrigin={{
+                          vertical: "top",
+                          horizontal: "center"
+                        }}
+                      >
+                        <Typography className={classes.popover}>cURL copied to clipboard</Typography>
+                      </Popover>
+                      <Button
+                        size="small"
+                        type="button"
+                        variant="contained"
+                        className={classes.subActionButton}
+                        ref={this.curlButtonRef}
+                        onClick={this.onCopyCurl}
+                      >
+                        cURL
+                        <SaveAltIcon className={classes.curlIcon} />
+                      </Button>
+                      <input
+                        placeholder="curl"
+                        className={classes.curlInput}
+                        value={this.generateCurl()}
+                        ref={this.curlInputRef}
+                        tabIndex={-1}
+                        readOnly
+                      />
+                      <Popover
+                        open={clearCachePopoverVisible}
+                        anchorEl={this.clearCacheButtonRef.current}
+                        onClose={this.onClearCachePopoverClose}
+                        anchorOrigin={{
+                          vertical: "bottom",
+                          horizontal: "center"
+                        }}
+                        transformOrigin={{
+                          vertical: "center",
+                          horizontal: "center"
+                        }}
+                      >
+                        <Typography className={`${classes.popover} ${classes.popoverSuccess}`}>
+                          Cache cleared!
+                        </Typography>
+                      </Popover>
+                      <Button
+                        size="small"
+                        type="button"
+                        variant="contained"
+                        className={classes.subActionButton}
+                        ref={this.clearCacheButtonRef}
+                        disabled={actionPending === ACTIONS["CLEAR-CACHE"]}
+                        onClick={this.onResetCache}
+                      >
+                        {actionPending === ACTIONS["CLEAR-CACHE"] ? "Loading..." : "clear build cache"}
+                      </Button>
+                    </Box>
                   </Box>
                 </Grid>
               </Grid>
